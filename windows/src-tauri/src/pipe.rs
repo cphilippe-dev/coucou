@@ -226,6 +226,16 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         return;
     }
 
+    // Mode « accepter automatiquement » (menu de l'icône) : réponse immédiate, pas de carte.
+    if crate::auto_allow::should_allow(&payload) {
+        let tool = payload.get("tool_name").and_then(Value::as_str).unwrap_or("?");
+        log::line(format!("hook PermissionRequest {tool} auto-allowed"));
+        let _ = pipe.write_all(b"allow\n").await;
+        let _ = pipe.flush().await;
+        pipe.finish();
+        return;
+    }
+
     let id = format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
     let (tx, mut rx) = mpsc::channel::<Reply>(4);
     {

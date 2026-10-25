@@ -120,6 +120,10 @@ pub fn setup(app: &AppHandle) {
                 if !platform::prepare_pill_window(&win, mode) {
                     let _ = win.destroy();
                     mode = DesktopMode::Off;
+                } else if park {
+                    // Rangée hors écran, la fenêtre ne doit jamais prendre la souris :
+                    // si Windows la replace sur un écran, elle bloquerait les clics.
+                    let _ = win.set_ignore_cursor_events(true);
                 }
             }
             Err(err) => {
@@ -139,6 +143,7 @@ pub fn setup(app: &AppHandle) {
     });
     app.manage(pill.clone());
     if mode == DesktopMode::Poll {
+        repark_when_idle(app.clone(), pill.clone());
         spawn_poll(app.clone(), pill);
     }
 }
@@ -198,6 +203,7 @@ fn show(app: &AppHandle, pill: &Pill, visible: bool) {
         DesktopMode::Poll => {
             if !visible {
                 let _ = win.set_position(PhysicalPosition::new(PARKED.0, PARKED.1));
+                let _ = win.set_ignore_cursor_events(true);
             }
             let (lock, cv) = &pill.poll;
             *lock.lock().unwrap() = visible;
@@ -279,6 +285,32 @@ pub fn set_hot(app: &AppHandle, rects: Vec<(f64, f64, f64, f64)>) {
             let _ = app.run_on_main_thread(move || platform::set_pill_input(&win, rects));
         }
     }
+}
+
+/// Windows : au démarrage, WebView2 ou un changement d'écran peut ramener la
+/// fenêtre rangée sur l'écran. Tant que la pilule n'a rien à montrer, on la
+/// range à nouveau et on la rend transparente aux clics, quelques fois au début
+/// puis toutes les 10 s.
+fn repark_when_idle(app: AppHandle, pill: Arc<Pill>) {
+    std::thread::spawn(move || {
+        let delays = [500u64, 1500, 3000, 6000];
+        let mut i = 0;
+        loop {
+            let ms = delays.get(i).copied().unwrap_or(10_000);
+            i += 1;
+            std::thread::sleep(Duration::from_millis(ms));
+            if pill.shown.load(Ordering::Relaxed) {
+                continue;
+            }
+            let Some(win) = window(&app) else { continue };
+            let away = win.outer_position().map(|p| p.x <= PARKED.0 + 100 && p.y <= PARKED.1 + 100).unwrap_or(false);
+            if !away {
+                crate::log::line("flow pill: back on screen while idle, parked again".to_string());
+                let _ = win.set_position(PhysicalPosition::new(PARKED.0, PARKED.1));
+            }
+            let _ = win.set_ignore_cursor_events(true);
+        }
+    });
 }
 
 /// Windows: ~30 times a second while the pill shows, the window takes the

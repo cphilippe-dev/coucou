@@ -1,6 +1,7 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod agent_hooks;
+mod auto_allow;
 mod agents;
 mod chat;
 mod claude;
