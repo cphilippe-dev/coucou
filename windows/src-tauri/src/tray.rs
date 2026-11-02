@@ -4,7 +4,7 @@
 
 use std::sync::Mutex;
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::image::Image;
 use tauri::{AppHandle, Emitter, Manager, Wry};
@@ -45,8 +45,25 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let [open, recap, wardrobe, settings, pause, quit] = [0, 1, 2, 3, 4, 5].map(|i| &items[i].1);
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
 
-    let menu = Menu::with_items(app, &[open, recap, &sep1, wardrobe, settings, pause, &sep2, quit])?;
+    // Accepter automatiquement les autorisations pendant X heures (auto_allow.rs).
+    let aa_status = MenuItem::with_id(app, "aa_status", crate::auto_allow::status_label(), false, None::<&str>)?;
+    let aa_sep = PredefinedMenuItem::separator(app)?;
+    let aa_1 = MenuItem::with_id(app, "aa_1", "Pendant 1 heure", true, None::<&str>)?;
+    let aa_2 = MenuItem::with_id(app, "aa_2", "Pendant 2 heures", true, None::<&str>)?;
+    let aa_4 = MenuItem::with_id(app, "aa_4", "Pendant 4 heures", true, None::<&str>)?;
+    let aa_8 = MenuItem::with_id(app, "aa_8", "Pendant 8 heures", true, None::<&str>)?;
+    let aa_stop = MenuItem::with_id(app, "aa_stop", "Arrêter", true, None::<&str>)?;
+    let auto_allow = Submenu::with_items(
+        app,
+        "Accepter les autorisations",
+        true,
+        &[&aa_status, &aa_sep, &aa_1, &aa_2, &aa_4, &aa_8, &aa_stop],
+    )?;
+    app.manage(AutoAllowStatus(aa_status));
+
+    let menu = Menu::with_items(app, &[open, recap, &sep1, &auto_allow, &sep2, wardrobe, settings, pause, &sep3, quit])?;
     app.manage(Items(items));
     // Its click goes to the island like the others (id "update"): it opens the update card.
     let update = MenuItem::with_id(app, "update", "", true, None::<&str>)?;
@@ -60,6 +77,15 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             "settings" => crate::show_settings_window(app),
             // The Coucou window: dictation, notes and every setting.
             "open" => crate::show_hub(app, None),
+            "aa_1" => start_auto_allow(app, 1),
+            "aa_2" => start_auto_allow(app, 2),
+            "aa_4" => start_auto_allow(app, 4),
+            "aa_8" => start_auto_allow(app, 8),
+            "aa_stop" => {
+                crate::auto_allow::stop();
+                crate::log::line("auto-allow stopped".to_string());
+                refresh_auto_allow(app);
+            }
             id => {
                 let _ = app.emit_to(WINDOW_LABEL, "tray", id.to_string());
             }
@@ -71,6 +97,46 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 
     builder.build(app)?;
     Ok(())
+}
+
+/// La ligne d'état du sous-menu « Accepter les autorisations ».
+struct AutoAllowStatus(MenuItem<Wry>);
+
+/// Met à jour la ligne d'état et l'infobulle de l'icône.
+fn refresh_auto_allow(app: &AppHandle) {
+    let label = crate::auto_allow::status_label();
+    if let Some(status) = app.try_state::<AutoAllowStatus>() {
+        let _ = status.0.set_text(&label);
+    }
+    if let Some(tray) = app.tray_by_id("coucou") {
+        let tip = if crate::auto_allow::remaining() > 0 { format!("Coucou — {label}") } else { "Coucou".to_string() };
+        let _ = tray.set_tooltip(Some(tip));
+    }
+}
+
+/// Lance la fenêtre de `hours` heures, puis rafraîchit l'état chaque minute
+/// jusqu'à la fin (ou jusqu'à ce qu'une autre fenêtre / Arrêter la remplace).
+fn start_auto_allow(app: &AppHandle, hours: u64) {
+    let until = crate::auto_allow::start(hours);
+    crate::log::line(format!("auto-allow on for {hours} h"));
+    refresh_auto_allow(app);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let wait = crate::auto_allow::time_left().min(std::time::Duration::from_secs(60));
+            tokio::time::sleep(wait.max(std::time::Duration::from_secs(1))).await;
+            if crate::auto_allow::until() != until {
+                return; // remplacée ou arrêtée : l'autre tâche s'en charge
+            }
+            refresh_auto_allow(&app);
+            if crate::auto_allow::remaining() == 0 {
+                crate::auto_allow::stop();
+                crate::log::line("auto-allow expired".to_string());
+                refresh_auto_allow(&app);
+                return;
+            }
+        }
+    });
 }
 
 /// Relabels the menu in the current language.
