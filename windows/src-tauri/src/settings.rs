@@ -115,6 +115,11 @@ pub struct Settings {
     /// the screen wakes it). Kept as it comes, like `mochi_outfit`: the island
     /// reads what it doesn't know as "mochi".
     pub closed_island: String,
+    /// Version perso : discreet mode. The island stays out of sight (no closed
+    /// island, no greeting, no reveal on activity, no finish/error alerts) and
+    /// only opens for a permission request or a question. On by default;
+    /// toggled from the tray menu.
+    pub discreet: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -186,6 +191,7 @@ impl Default for Settings {
             phone_relay_url: String::new(),
             show_clock: false,
             closed_island: "mochi".into(),
+            discreet: true,
         }
     }
 }
@@ -487,7 +493,8 @@ mod tests {
   "phoneRelay": true,
   "phoneRelayUrl": "wss://relay.example.workers.dev",
   "showClock": true,
-  "closedIsland": "music"
+  "closedIsland": "music",
+  "discreet": false
 }"##;
 
     fn custom() -> Value {
@@ -1010,6 +1017,7 @@ mod tests {
                 "phoneRelayUrl",
                 "showClock",
                 "closedIsland",
+                "discreet",
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);

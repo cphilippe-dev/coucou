@@ -1,6 +1,7 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod agent_hooks;
+mod auto_allow;
 mod agents;
 mod chat;
 mod claude;
@@ -526,6 +527,14 @@ fn approval_answer(
 #[tauri::command]
 fn approval_ack(app: AppHandle, request_id: String) {
     pipe::acknowledge(&app, &request_id);
+    // Version perso : a card that waits must be seen. Another always-on-top
+    // window (a game, a video, an overlay) can sit over the island, and Windows
+    // only reorders topmost windows when the flag is set again.
+    if let Some(win) = island::window(&app) {
+        let _ = win.show();
+        let _ = win.set_always_on_top(false);
+        let _ = win.set_always_on_top(true);
+    }
 }
 
 /// Nobody can act on this request — the island is paused, or another card is
@@ -728,7 +737,7 @@ fn shortcuts_suspend(app: AppHandle, shared: State<Shared>, suspended: bool) {
 /// for the *same* arguments as the island (see `additionalBrowserArgs` in
 /// tauri.conf.json) — a mismatch makes the second window come up blank, with no
 /// error anywhere.
-pub(crate) const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+pub(crate) const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --autoplay-policy=no-user-gesture-required";
 
 /// In a dev build the pages are served by Vite, so the second window needs the
 /// absolute dev URL; a bundled build resolves it inside the app bundle.
@@ -1107,7 +1116,8 @@ pub fn run() {
             whatsapp::start(&handle, &loaded.active_integrations);
             shortcuts::apply(&handle, &loaded.shortcuts);
             // New versions: nothing goes to GitHub until the user agrees (update.rs).
-            update::start(handle.clone());
+            // Version perso : Coucou ne cherche plus seul les mises à jour.
+            // update::start(handle.clone());
             if loaded.autostart {
                 // Login items written before 0.5 start Coucou without --autostart:
                 // writing it again adds it, so the window stays hidden at login.

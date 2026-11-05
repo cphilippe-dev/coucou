@@ -177,6 +177,7 @@ export class Island {
     }
     this.fsm.pinned = false;
     this.setView(State.defaultView());
+    this.settleAfterCard();
   }
 
   /**
@@ -393,6 +394,7 @@ export class Island {
   private wireFsm() {
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
     this.fsm.openOnHover = State.settings.openOnHover;
+    this.fsm.petitToHiddenDelay = State.settings.discreet ? 3 : 60;
     this.fsm.onTransition = (from, to) => {
       // The greeting is over, however it ended: back to his desktop spot.
       if (from === "coucou" && to !== "coucou") this.desktop.launch();
@@ -425,7 +427,21 @@ export class Island {
   }
 
   launch() {
+    if (State.settings.discreet) {
+      // No greeting: Coucou starts folded, out of sight.
+      this.desktop.launch();
+      this.fsm.forceHidden();
+      this.updateWindowCollapsed();
+      return;
+    }
     this.fsm.launch();
+  }
+
+  /** Version perso : once the last card is answered, a discreet island folds at once. */
+  settleAfterCard() {
+    if (!State.settings.discreet || State.pendingApproval) return;
+    this.fsm.pinned = false;
+    this.fsm.forceHidden();
   }
 
   // ── Mode / view ─────────────────────────────────────────────────────────────
@@ -545,11 +561,13 @@ export class Island {
   }
 
   reveal() {
+    if (State.settings.discreet) return;
     this.fsm.reveal();
   }
 
   /** Music started playing: the compact island, without the peek sound (musicReveal). */
   revealSilently() {
+    if (State.settings.discreet) return;
     this.silentReveal = true;
     this.fsm.reveal();
     this.silentReveal = false;
@@ -758,9 +776,14 @@ export class Island {
 
   // ── Geometry ────────────────────────────────────────────────────────────────
 
+  /** Version perso : in discreet mode nothing stays on screen when closed. */
+  private get closedStyle() {
+    return State.settings.discreet ? "hidden" : closedIsland(State.settings.closedIsland);
+  }
+
   /** The closed island stays on screen (anything but "hidden"). */
   private get closedShows(): boolean {
-    return closedIsland(State.settings.closedIsland) !== "hidden";
+    return this.closedStyle !== "hidden";
   }
 
   private targetSize(): { w: number; h: number; r: number } {
@@ -855,7 +878,7 @@ export class Island {
   private scheduleClosedLife() {
     if (this.closedLife != null) window.clearTimeout(this.closedLife);
     this.closedLife = null;
-    if (State.mode !== "hidden" || closedIsland(State.settings.closedIsland) !== "mochi") {
+    if (State.mode !== "hidden" || this.closedStyle !== "mochi") {
       this.closedLook = { x: 0, y: 0 };
       return;
     }
@@ -895,7 +918,7 @@ export class Island {
    * resizes the window to it.
    */
   private updateClosed() {
-    const style = closedIsland(State.settings.closedIsland);
+    const style = this.closedStyle;
     const track = Spotify.state.track;
     const content: ClosedContent | null = State.mode === "hidden" || this.collapsed
       ? closedContent(style, {
@@ -1155,12 +1178,38 @@ export class Island {
     if (this.running) return;
     this.running = true;
     this.lastFrame = performance.now();
-    requestAnimationFrame(this.frame);
+    this.scheduleFrame();
+  }
+
+  /**
+   * Version perso : WebView2 can stop giving this small always-on-top window
+   * its animation frames when it believes the window is hidden. The island then
+   * acknowledged a permission request without ever drawing the card. Each frame
+   * is asked of requestAnimationFrame AND of a 120 ms timer; whichever comes
+   * first runs it, the other is dropped, so there is only ever one loop.
+   */
+  private frameToken = 0;
+  private frameTimer: number | null = null;
+  private scheduleFrame() {
+    const token = ++this.frameToken;
+    if (this.frameTimer != null) window.clearTimeout(this.frameTimer);
+    requestAnimationFrame((t) => {
+      if (token !== this.frameToken) return;
+      this.frameToken++;
+      this.frame(t);
+    });
+    this.frameTimer = window.setTimeout(() => {
+      this.frameTimer = null;
+      if (token !== this.frameToken) return;
+      this.frameToken++;
+      this.frame(performance.now());
+    }, 120);
   }
 
   private frame = (nowMs: number) => {
-    const dt = Math.min(0.05, (nowMs - this.lastFrame) / 1000);
-    this.lastFrame = nowMs;
+    // rAF and timer timestamps can disagree by a few ms: never a negative step.
+    const dt = Math.min(0.05, Math.max(0, nowMs - this.lastFrame) / 1000);
+    this.lastFrame = Math.max(nowMs, this.lastFrame);
 
     this.width.step(dt, nowMs);
     this.height.step(dt, nowMs);
@@ -1217,16 +1266,18 @@ export class Island {
     const botMoving = !this.botCx.settled || !this.botCy.settled || !this.botSize.settled;
     // Closed, only the folding — and Mochi reaching his place in the closed island.
     const busy = State.mode === "hidden"
-      ? settling || (closedIsland(State.settings.closedIsland) === "mochi" &&
+      ? settling || (this.closedStyle === "mochi" &&
         (botMoving || nowMs < this.closedAwakeUntil))
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
         greetingActive || this.engine.busy || UploadSeq.isActive || viewAnimating;
 
     if (busy) {
-      requestAnimationFrame(this.frame);
+      this.scheduleFrame();
     } else {
       this.running = false;
+      if (this.frameTimer != null) window.clearTimeout(this.frameTimer);
+      this.frameTimer = null;
       Sound.idle();
     }
   };
@@ -1234,7 +1285,7 @@ export class Island {
   private updateBotTargets() {
     let p = botPosition(State.mode, State.view, this.height.value, State.uploadProgress);
     // The closed island with Mochi in it, as on a Mac without a notch.
-    if (State.mode === "hidden" && closedIsland(State.settings.closedIsland) === "mochi") {
+    if (State.mode === "hidden" && this.closedStyle === "mochi") {
       p = { cx: this.width.value / 2, cy: this.height.value / 2, diameter: CLOSED_BOT_D, opacity: 1 };
     }
     this.botCx.target = p.cx;
@@ -1469,10 +1520,13 @@ export class Island {
       if (this.collapsed) this.sendCollapsedSize();
     }
     this.scheduleClosedLife();
+    // Discreet mode turned on: fold away now, unless a card waits.
+    if (State.settings.discreet && !State.pendingApproval && State.mode !== "hidden") this.fsm.forceHidden();
     Sound.setEnabled(State.settings.soundEnabled);
     Sound.setVolume(State.settings.soundVolume);
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
     this.fsm.openOnHover = State.settings.openOnHover;
+    this.fsm.petitToHiddenDelay = State.settings.discreet ? 3 : 60;
     State.notify();
     // ponytail: one timer for the life of the window; a minute is the clock's finest tick.
     this.clockTimer ??= window.setInterval(() => this.updateClock(), 10_000);

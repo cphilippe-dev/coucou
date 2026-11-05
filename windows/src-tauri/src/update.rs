@@ -453,6 +453,7 @@ fn set_phase(app: &AppHandle, phase: Phase) {
 
 /// At launch: a first look 30 s in, then every hour (GitHub only every 6 h).
 /// The task sleeps in between: nothing runs while nothing is due.
+#[allow(dead_code)] // version perso : plus appelée (aucune recherche automatique)
 pub fn start(app: AppHandle) {
     remove_old_downloads();
     tauri::async_runtime::spawn(async move {
@@ -588,6 +589,7 @@ pub async fn check(app: &AppHandle, manual: bool) {
 
 /// Old downloads left in the temp folder by an update that ran: Coucou quits
 /// before the installer is done with its file, so they go at the next launch.
+#[allow(dead_code)]
 fn remove_old_downloads() {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
     for entry in entries.flatten() {

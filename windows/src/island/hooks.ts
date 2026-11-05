@@ -62,6 +62,7 @@ export function dropPendingCard(island: Island): void {
   if (State.view === "approval" || State.view === "question") {
     island.setView(State.defaultView());
   }
+  island.settleAfterCard();
   State.notify();
 }
 
@@ -350,6 +351,9 @@ function handleHook(island: Island, payload: HookPayload) {
 
   /** Alerts force the island open; work events only reveal the compact island. */
   const surface = (view: Parameters<Island["alert"]>[0], isAlert: boolean) => {
+    // Version perso : discreet, nothing but a question from an agent opens the
+    // island here (permission cards open it themselves, below).
+    if (State.settings.discreet && !(isAlert && view === "overview")) return;
     if (State.mode === "expanded") {
       if (isAlert) island.setView(view);
     } else if (isAlert) {

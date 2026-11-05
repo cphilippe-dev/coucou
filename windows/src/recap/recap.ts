@@ -55,6 +55,7 @@ class RecapController {
   /** Monday ≥ 8 am, not shown yet this week, something to show, nobody interrupted. */
   async check(host: RecapHost, now = new Date()) {
     // The clock first: six days out of seven this is all that runs.
+    if (State.settings.discreet) return;
     if (this.checking || !shouldAutoShow(now, "") || !this.quiet()) return;
     this.checking = true;
     try {
